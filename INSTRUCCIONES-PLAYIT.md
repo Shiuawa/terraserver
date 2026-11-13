@@ -1,0 +1,53 @@
+# Conectar TerraServer con playit.gg
+
+Esta guía sirve para que tus amigos entren a tu servidor de Terraria desde
+cualquier lugar, sin abrir puertos en el router.
+
+## Antes de empezar
+
+- TerraServer instalado y abierto.
+- Conexión a internet.
+- Una cuenta de **playit.gg** (gratis).
+- El puerto de tu servidor (por defecto **7777**; lo ves en la app).
+
+## Parte 1: vincular el agente
+
+1. Abre TerraServer. La primera vez aparece **Conectar con playit.gg**.
+2. Pulsa **Abrir playit.gg** e inicia sesión (o crea una cuenta).
+3. En playit.gg entra en **Setup** y pulsa **New Agent Wizard**.
+4. Elige **Docker**. Te mostrará un bloque de configuración con `SECRET_KEY=...`.
+5. Copia ese bloque (o solo el valor de `SECRET_KEY`).
+6. Vuelve a TerraServer, pégalo en el campo y pulsa **Conectar**.
+
+TerraServer guarda la clave dentro de la app y arranca el agente. Cuando veas
+**playit.gg: conectado**, pasa a la parte 2.
+
+## Parte 2: crear el túnel
+
+1. En playit.gg pulsa **Create Tunnel**.
+2. Elige **Terraria**.
+3. En **Local** pon `127.0.0.1` y el puerto de tu servidor (**7777** por defecto).
+4. Guarda el túnel.
+5. playit.gg te dará una dirección parecida a `algo.tun.ply.gg:28418`.
+6. Cópiala. En TerraServer pulsa **Pegar dirección**, pégala y pulsa **Guardar**.
+
+## Parte 3: jugar
+
+1. En TerraServer pulsa **Iniciar servidor** y espera a que diga **Servidor disponible**.
+2. Pulsa **Copiar** para copiar la dirección.
+3. Envíala a tus amigos. Ellos abren Terraria → Multijugador → Unirse por IP y la pegan.
+
+Todos deben tener Terraria **1.4.5.8.x** (PC o móvil).
+
+## Si algo falla
+
+- **La clave no funciona / InvalidAgentKey**: crea un agente nuevo en playit.gg y pega su `SECRET_KEY`.
+- **No aparece la dirección**: entra a playit.gg/agents y comprueba que el túnel esté activo y apunte al puerto correcto.
+- **Tus amigos no entran**: revisa que el servidor esté iniciado, que el túnel esté activo y que el puerto del túnel coincida con el de TerraServer.
+- **El puerto está ocupado**: cierra otros programas o cambia el puerto en TerraServer y crea el túnel con ese mismo puerto.
+
+## Seguridad
+
+- La dirección del túnel es pública: cualquiera que la tenga puede entrar.
+- **Nunca compartas** la `SECRET_KEY` ni el archivo `playit/secret.toml`.
+- Si dejas de usar playit.gg, borra el agente desde el panel y detén el túnel.
