@@ -49,7 +49,7 @@ def copy_runtime_data(stage):
     server_source = ROOT / "server" / server_name
     if not server_source.is_dir():
         raise RuntimeError(f"No está incluido el servidor de Terraria para {system}: {server_source}")
-    data_dir = stage / (".dependencias" if system == "Linux" else "dependencias")
+    data_dir = stage / ".dependencias"
     server_target = data_dir / "server" / server_name
     if server_target.exists():
         shutil.rmtree(server_target)
@@ -92,7 +92,7 @@ def main():
         temp = Path(temp_name)
         compiled = temp / "compiled"
         work = temp / "work"
-        contents_name = ".dependencias" if platform.system() == "Linux" else "dependencias"
+        contents_name = ".dependencias"
         for stale in ("dependencias", ".dependencias"):
             stale_dir = output / stale
             if stale_dir.is_dir() and stale != contents_name:
