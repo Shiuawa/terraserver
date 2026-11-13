@@ -36,6 +36,8 @@ YELLOW = "#f5d76e"
 BLUE = "#7c8cff"           # alias
 BTN = "#2a2a3d"            # alias
 
+PLAYIT_URL = "https://playit.gg/account/analytics/overview"
+
 FONT_FAMILY = "TkDefaultFont"
 FONT = ("TkDefaultFont", 10)
 FONT_B = ("TkDefaultFont", 10, "bold")
@@ -560,9 +562,18 @@ class PlayitController:
             return False
 
     def extract_key(self, value):
-        # Acepta la clave sola o el bloque completo de Docker/Compose.
-        match = re.search(r"(?:SECRET_KEY\s*=|secret_key\s*=\s*\"?)\s*([0-9a-fA-F]{64})", value)
-        return match.group(1).lower() if match else None
+        """Acepta SECRET_KEY, secret_key, PLAYIT_SECRET_KEY o una clave suelta."""
+        text = value or ""
+        patterns = (
+            r"(?:PLAYIT_)?SECRET_KEY[ \t]*[:=][ \t]*[\"']?([0-9a-fA-F]{64})",
+            r"secret_key[ \t]*[:=][ \t]*[\"']?([0-9a-fA-F]{64})",
+            r"\b([0-9a-fA-F]{64})\b",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text, re.I)
+            if match:
+                return match.group(1).lower()
+        return None
 
     def _download_agent(self):
         path = self.agent_path()
@@ -769,9 +780,14 @@ class App(tk.Tk):
         self.lbl_playit = tk.Label(inner, text="playit.gg: sin conectar", bg=SURFACE,
                                    fg=YELLOW, font=FONT_B)
         self.lbl_playit.pack(anchor="w")
-        self.btn_playit = ttk.Button(inner, text="Conectar", style="Secondary.TButton",
+        playit_row = tk.Frame(inner, bg=SURFACE)
+        playit_row.pack(fill="x", pady=(8, 12))
+        self.btn_playit = ttk.Button(playit_row, text="Conectar", style="Secondary.TButton",
                                      command=self.on_link)
-        self.btn_playit.pack(anchor="w", pady=(8, 12))
+        self.btn_playit.pack(side="left")
+        self.btn_rekey = ttk.Button(playit_row, text="Cambiar clave", style="Secondary.TButton",
+                                    command=lambda: PlayitSetupDialog(self))
+        self.btn_rekey.pack(side="left", padx=(8, 0))
         fields = tk.Frame(inner, bg=SURFACE)
         fields.pack(fill="x")
         fields.grid_columnconfigure(0, weight=1)
@@ -1012,7 +1028,7 @@ class App(tk.Tk):
         if not self.playit.has_secret():
             PlayitSetupDialog(self)
         else:
-            open_browser("https://playit.gg/account/analytics/overview")
+            open_browser(PLAYIT_URL)
             TunnelHelpDialog(self)
 
     def paste_addr(self):
@@ -1112,20 +1128,21 @@ class PlayitSetupDialog(tk.Toplevel):
         tk.Label(body, text="Haz estos pasos una sola vez para vincular esta app.",
                  bg=BG, fg=DIM, font=FONT).pack(anchor="w", pady=(2, 12))
         instructions = (
-            "1. Inicia sesión en playit.gg (o crea una cuenta).\n"
-            "2. Abre Setup y pulsa New Agent Wizard.\n"
-            "3. Elige Docker y copia el bloque de configuración que aparece.\n"
-            "4. Pega aquí el bloque completo o solo el valor de SECRET_KEY.\n"
-            "5. Pulsa Conectar; la app guardará la clave y arrancará el agente.\n\n"
-            "Luego crea en el panel un túnel Terraria (TCP) hacia 127.0.0.1 y el puerto configurado en la app."
+            "1. Abre playit.gg e inicia sesión.\n"
+            "2. Arriba, pulsa «Setup» y luego «New Agent Wizard».\n"
+            "3. Elige «Docker», escribe un nombre y pulsa «Next».\n"
+            "4. Copia el bloque «Docker Compose» (no el de «Docker Run»).\n"
+            "5. Pégalo aquí abajo y pulsa Conectar.\n\n"
+            "TerraServer no usa Docker: extrae la clave del bloque y arranca\n"
+            "el agente incluido."
         )
         tk.Label(body, text=instructions, bg=BG, fg=FG, font=FONT,
                  justify="left", anchor="w", wraplength=560).pack(fill="x", pady=(0, 12))
         ttk.Button(body, text="Abrir playit.gg", style="Secondary.TButton",
-                   command=lambda: open_browser("https://playit.gg/account/analytics/overview")).pack(anchor="w", pady=(0, 14))
-        tk.Label(body, text="Pega el bloque de Docker o la SECRET_KEY:", bg=BG, fg=FG,
+                   command=lambda: open_browser(PLAYIT_URL)).pack(anchor="w", pady=(0, 14))
+        tk.Label(body, text="Docker Compose de playit:", bg=BG, fg=FG,
                  font=FONT_B).pack(anchor="w")
-        self.input = tk.Text(body, height=5, bg=PANEL, fg=FG, insertbackground=FG,
+        self.input = tk.Text(body, height=9, bg=PANEL, fg=FG, insertbackground=FG,
                              relief="flat", font=("DejaVu Sans Mono", 9), wrap="word",
                              highlightthickness=1, highlightbackground=BORDER)
         self.input.pack(fill="x", pady=(6, 10))
@@ -1144,7 +1161,7 @@ class PlayitSetupDialog(tk.Toplevel):
         pasted = self.input.get("1.0", "end").strip()
         key = self.app.playit.extract_key(pasted)
         if not key:
-            self.status.config(text="No encontré una SECRET_KEY válida. Pega el bloque de Docker completo o una clave de 64 caracteres hexadecimales.", fg=RED)
+            self.status.config(text="No encontré una SECRET_KEY válida. Pega el Docker Compose completo o la clave de 64 caracteres.", fg=RED)
             return
         self.connect_button.config(state="disabled", text="Conectando…")
         self.status.config(text="Guardando la clave e intentando conectar con playit.gg (puede tardar hasta un minuto)…", fg=YELLOW)
@@ -1167,7 +1184,7 @@ class PlayitSetupDialog(tk.Toplevel):
         self.app.log("playit quedó vinculado y el agente está activo.")
         self.app.refresh()
         self.destroy()
-        open_browser("https://playit.gg/account/analytics/overview")
+        open_browser(PLAYIT_URL)
         TunnelHelpDialog(self.app)
 
 
@@ -1185,22 +1202,29 @@ class TunnelHelpDialog(tk.Toplevel):
         self.build()
 
     def build(self):
-        self.geometry("580x500")
-        self.minsize(520, 440)
+        self.geometry("620x680")
+        self.minsize(560, 600)
         body = tk.Frame(self, bg=BG)
         body.pack(fill="both", expand=True, padx=24, pady=22)
         tk.Label(body, text="Crea el túnel de Terraria", bg=BG, fg=FG,
                  font=(FONT_FAMILY, 15, "bold"), justify="left").pack(anchor="w")
         port = B.cfg().get("PORT", "7777")
-        steps = ("1. En el panel de playit.gg pulsa «Create Tunnel».\n"
-                 "2. Elige «Terraria».\n"
-                 f"3. En «Local» pon 127.0.0.1 y el puerto {port}.\n"
-                 "4. Copia la IP/nombre y el puerto que te muestre.\n"
-                 "5. Escríbelos aquí por separado y pulsa Guardar.")
+        steps = ("1. Arriba en playit.gg, pulsa «Tunnels».\n"
+                 "2. En el centro, pulsa «Create your first tunnel».\n"
+                 "3. Escribe un nombre (ej. TerraServer) y pulsa «Next».\n"
+                 "4. Selecciona «Terraria».\n"
+                 "5. En la versión gratuita, elige «Global Anycast (your ISP decides)» y pulsa «Next».\n"
+                 "6. Asigna el túnel a tu agente (el que aparece conectado).\n"
+                 f"7. Verifica: Local 127.0.0.1 · Puerto {port} · Proxy None.\n"
+                 "8. Pulsa «Create Tunnel».\n"
+                 "9. Copia la IP/nombre y el puerto que te muestre, escríbelos aquí y guarda.\n\n"
+                 "El servidor y playit deben estar conectados para que el túnel funcione.")
         tk.Label(body, text=steps, bg=BG, fg=FG, font=FONT, justify="left",
-                 anchor="w", wraplength=530).pack(fill="x", pady=(10, 12))
+                 anchor="w", wraplength=560).pack(fill="x", pady=(10, 8))
+        tk.Label(body, text=f"Local: 127.0.0.1 | Puerto: {port} | Proxy: None",
+                 bg=BG, fg=FG, font=("DejaVu Sans Mono", 9)).pack(anchor="w", pady=(0, 8))
         ttk.Button(body, text="Abrir playit.gg", style="Secondary.TButton",
-                   command=lambda: open_browser("https://playit.gg/account/analytics/overview")).pack(anchor="w", pady=(0, 14))
+                   command=lambda: open_browser(PLAYIT_URL)).pack(anchor="w", pady=(0, 14))
         fields = tk.Frame(body, bg=BG)
         fields.pack(fill="x", pady=(0, 8))
         fields.grid_columnconfigure(0, weight=1)
