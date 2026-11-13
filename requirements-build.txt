@@ -1,0 +1,2 @@
+# Build machine only; packaged users do not need Python or PyInstaller.
+pyinstaller>=6.10,<7
