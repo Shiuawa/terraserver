@@ -159,6 +159,46 @@ def port_open(port, host="127.0.0.1", timeout=0.6):
         sock.close()
 
 
+_LOCAL_IP = (0.0, None)
+
+
+def local_ip():
+    """IP local (LAN) de este equipo; 127.0.0.1 si no hay red."""
+    global _LOCAL_IP
+    now = time.time()
+    if _LOCAL_IP[1] and now - _LOCAL_IP[0] < 60:
+        return _LOCAL_IP[1]
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        value = sock.getsockname()[0]
+    except OSError:
+        try:
+            value = socket.gethostbyname(socket.gethostname())
+        except OSError:
+            value = "127.0.0.1"
+    finally:
+        sock.close()
+    _LOCAL_IP = (now, value)
+    return value
+
+
+def split_address(address):
+    """Separa 'host:puerto' (o '[ipv6]:puerto') en dos valores."""
+    address = (address or "").strip()
+    if not address:
+        return "", ""
+    if address.startswith("["):
+        host, sep, port = address.rpartition("]:")
+        if sep:
+            return host.lstrip("["), port
+        return address, ""
+    host, sep, port = address.rpartition(":")
+    if sep and port.isdigit():
+        return host, port
+    return address, ""
+
+
 def app_base():
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
@@ -600,10 +640,21 @@ class PlayitController:
             pass
         self.pid_file.unlink(missing_ok=True)
 
-    def save_address(self, text):
-        text = (text or "").strip()
-        if not re.search(r"[\w.-]+:\d+", text):
-            raise RuntimeError("Esa dirección no parece válida. Debe verse como nombre.tun.ply.gg:12345.")
+    def address_parts(self):
+        """Devuelve (IP/nombre, puerto) del túnel, por separado."""
+        return split_address(self.address())
+
+    def save_address(self, host, port=None):
+        if port is None or not str(port).strip():
+            host, port = split_address(host)
+        host = (host or "").strip()
+        port = (port or "").strip()
+        if (not re.fullmatch(r"[A-Za-z0-9._-]+", host)
+                or not re.fullmatch(r"\d{1,5}", port)
+                or not 0 < int(port) < 65536):
+            raise RuntimeError("La IP/nombre y el puerto no son válidos. "
+                               "Ejemplo: algo.tun.ply.gg y 12345.")
+        text = f"{host}:{port}"
         self.directory.mkdir(parents=True, exist_ok=True)
         self.cache.write_text(text + "\n")
         return text
@@ -721,16 +772,43 @@ class App(tk.Tk):
         self.btn_playit = ttk.Button(inner, text="Conectar", style="Secondary.TButton",
                                      command=self.on_link)
         self.btn_playit.pack(anchor="w", pady=(8, 12))
-        addr_row = tk.Frame(inner, bg=SURFACE)
-        addr_row.pack(fill="x")
-        self.lbl_addr = tk.Label(addr_row, text="Conecta playit.gg para obtener tu dirección",
-                                 bg=PANEL, fg=DIM, font=("DejaVu Sans Mono", 11),
-                                 anchor="w", padx=10, pady=8,
+        fields = tk.Frame(inner, bg=SURFACE)
+        fields.pack(fill="x")
+        fields.grid_columnconfigure(0, weight=1)
+
+        ip_col = tk.Frame(fields, bg=SURFACE)
+        ip_col.grid(row=0, column=0, sticky="we")
+        tk.Label(ip_col, text="IP / nombre", bg=SURFACE, fg=DIM,
+                 font=(FONT_FAMILY, 9)).pack(anchor="w")
+        ip_row = tk.Frame(ip_col, bg=SURFACE)
+        ip_row.pack(fill="x")
+        self.lbl_ip = tk.Label(ip_row, text="—", bg=PANEL, fg=DIM,
+                               font=("DejaVu Sans Mono", 10),
+                               anchor="w", padx=10, pady=8,
+                               highlightthickness=1, highlightbackground=BORDER)
+        self.lbl_ip.pack(side="left", fill="x", expand=True)
+        self.btn_copy_ip = ttk.Button(ip_row, text="Copiar", style="Secondary.TButton",
+                                      command=self.copy_ip, state="disabled")
+        self.btn_copy_ip.pack(side="right", padx=(8, 0))
+
+        port_col = tk.Frame(fields, bg=SURFACE)
+        port_col.grid(row=0, column=1, sticky="we", padx=(10, 0))
+        tk.Label(port_col, text="Puerto", bg=SURFACE, fg=DIM,
+                 font=(FONT_FAMILY, 9)).pack(anchor="w")
+        port_row = tk.Frame(port_col, bg=SURFACE)
+        port_row.pack(fill="x")
+        self.lbl_port = tk.Label(port_row, text="—", bg=PANEL, fg=DIM,
+                                 font=("DejaVu Sans Mono", 10),
+                                 anchor="center", padx=10, pady=8, width=7,
                                  highlightthickness=1, highlightbackground=BORDER)
-        self.lbl_addr.pack(side="left", fill="x", expand=True)
-        self.btn_copy = ttk.Button(addr_row, text="Copiar", style="Secondary.TButton",
-                                   command=self.copy_addr, state="disabled")
-        self.btn_copy.pack(side="right", padx=(8, 0))
+        self.lbl_port.pack(side="left")
+        self.btn_copy_port = ttk.Button(port_row, text="Copiar", style="Secondary.TButton",
+                                        command=self.copy_port, state="disabled")
+        self.btn_copy_port.pack(side="left", padx=(8, 0))
+
+        self.lbl_addr_hint = tk.Label(inner, text="", bg=SURFACE, fg=DIM,
+                                      font=(FONT_FAMILY, 9), justify="left")
+        self.lbl_addr_hint.pack(anchor="w", pady=(8, 0))
 
         # 3. Mundo
         inner = self.card("Mundo")
@@ -827,12 +905,18 @@ class App(tk.Tk):
             else:
                 self.lbl_playit.config(text="playit.gg: sin conectar", fg=YELLOW)
 
-            addr = self.playit.address()
-            self.lbl_addr.config(text=addr or "Conecta playit.gg para obtener tu dirección",
-                                 fg=FG if addr else DIM)
-            self.btn_copy.config(state="normal" if addr else "disabled")
-            if time.time() >= self.copied_until:
-                self.btn_copy.config(text="Copiar")
+            host, tunnel_port = self.playit.address_parts()
+            if host and tunnel_port:
+                source = "túnel playit"
+            else:
+                host, tunnel_port = local_ip(), str(st.get("portnum", ""))
+                source = "red local"
+            self.lbl_ip.config(text=host or "—", fg=FG if host else DIM)
+            self.lbl_port.config(text=tunnel_port or "—", fg=FG if tunnel_port else DIM)
+            self.btn_copy_ip.config(state="normal" if host else "disabled")
+            self.btn_copy_port.config(state="normal" if tunnel_port else "disabled")
+            self.lbl_addr_hint.config(
+                text=f"Datos de {source}: escribe la IP y el puerto por separado en Terraria.")
 
             if self.is_running:
                 self.btn_use.config(state="disabled")
@@ -935,14 +1019,20 @@ class App(tk.Tk):
         # Se mantiene por compatibilidad; la interfaz ya no expone este botón.
         TunnelHelpDialog(self)
 
-    def copy_addr(self):
-        addr = self.playit.address()
-        if not addr:
+    def _copy_value(self, value, button):
+        value = (value or "").strip()
+        if not value or value == "—":
             return
         self.clipboard_clear()
-        self.clipboard_append(addr)
-        self.copied_until = time.time() + 2
-        self.btn_copy.config(text="¡Copiado!")
+        self.clipboard_append(value)
+        button.config(text="¡Copiado!")
+        self.after(1500, lambda: button.config(text="Copiar"))
+
+    def copy_ip(self):
+        self._copy_value(self.lbl_ip.cget("text"), self.btn_copy_ip)
+
+    def copy_port(self):
+        self._copy_value(self.lbl_port.cget("text"), self.btn_copy_port)
 
     def on_use(self):
         if self.is_running:
@@ -1105,18 +1195,29 @@ class TunnelHelpDialog(tk.Toplevel):
         steps = ("1. En el panel de playit.gg pulsa «Create Tunnel».\n"
                  "2. Elige «Terraria».\n"
                  f"3. En «Local» pon 127.0.0.1 y el puerto {port}.\n"
-                 "4. Copia la dirección que te muestre (algo.tun.ply.gg:NNNNN).\n"
-                 "5. Pégala aquí y pulsa Guardar.")
+                 "4. Copia la IP/nombre y el puerto que te muestre.\n"
+                 "5. Escríbelos aquí por separado y pulsa Guardar.")
         tk.Label(body, text=steps, bg=BG, fg=FG, font=FONT, justify="left",
                  anchor="w", wraplength=530).pack(fill="x", pady=(10, 12))
         ttk.Button(body, text="Abrir playit.gg", style="Secondary.TButton",
                    command=lambda: open_browser("https://playit.gg/account/analytics/overview")).pack(anchor="w", pady=(0, 14))
-        tk.Label(body, text="Dirección del túnel:", bg=BG, fg=FG, font=FONT_B).pack(anchor="w")
-        self.entry = ttk.Entry(body, style="Dark.TEntry", font=("DejaVu Sans Mono", 10))
-        current = self.app.playit.address()
-        if current:
-            self.entry.insert(0, current)
-        self.entry.pack(fill="x", pady=(6, 8))
+        fields = tk.Frame(body, bg=BG)
+        fields.pack(fill="x", pady=(0, 8))
+        fields.grid_columnconfigure(0, weight=1)
+        tk.Label(fields, text="IP o nombre del túnel:", bg=BG, fg=FG,
+                 font=FONT_B).grid(row=0, column=0, sticky="w")
+        tk.Label(fields, text="Puerto:", bg=BG, fg=FG,
+                 font=FONT_B).grid(row=0, column=1, sticky="w", padx=(10, 0))
+        self.e_host = ttk.Entry(fields, style="Dark.TEntry", font=("DejaVu Sans Mono", 10))
+        self.e_port = ttk.Entry(fields, style="Dark.TEntry", font=("DejaVu Sans Mono", 10), width=10)
+        self.e_host.grid(row=1, column=0, sticky="we", pady=(4, 0))
+        self.e_port.grid(row=1, column=1, sticky="we", padx=(10, 0), pady=(4, 0))
+
+        current_host, current_port = self.app.playit.address_parts()
+        if current_host:
+            self.e_host.insert(0, current_host)
+        if current_port:
+            self.e_port.insert(0, current_port)
         self.status = tk.Label(body, text="", bg=BG, fg=YELLOW, font=FONT,
                                justify="left", wraplength=530)
         self.status.pack(fill="x", anchor="w")
@@ -1129,7 +1230,7 @@ class TunnelHelpDialog(tk.Toplevel):
 
     def save(self):
         try:
-            address = self.app.playit.save_address(self.entry.get())
+            address = self.app.playit.save_address(self.e_host.get(), self.e_port.get())
         except Exception as exc:
             self.status.config(text=str(exc), fg=RED)
             return
