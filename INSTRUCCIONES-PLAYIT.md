@@ -42,7 +42,7 @@ Todos deben tener Terraria **1.4.5.8.x** (PC o móvil).
 ## Si algo falla
 
 - **La clave no funciona / InvalidAgentKey**: crea un agente nuevo en playit.gg y pega su `SECRET_KEY`.
-- **No aparece la dirección**: entra a playit.gg/agents y comprueba que el túnel esté activo y apunte al puerto correcto.
+- **No aparece la dirección**: entra a playit.gg/account/analytics/overview y comprueba que el túnel esté activo y apunte al puerto correcto.
 - **Tus amigos no entran**: revisa que el servidor esté iniciado, que el túnel esté activo y que el puerto del túnel coincida con el de TerraServer.
 - **El puerto está ocupado**: cierra otros programas o cambia el puerto en TerraServer y crea el túnel con ese mismo puerto.
 

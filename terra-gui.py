@@ -928,7 +928,7 @@ class App(tk.Tk):
         if not self.playit.has_secret():
             PlayitSetupDialog(self)
         else:
-            open_browser("https://playit.gg/agents")
+            open_browser("https://playit.gg/account/analytics/overview")
             TunnelHelpDialog(self)
 
     def paste_addr(self):
@@ -1032,7 +1032,7 @@ class PlayitSetupDialog(tk.Toplevel):
         tk.Label(body, text=instructions, bg=BG, fg=FG, font=FONT,
                  justify="left", anchor="w", wraplength=560).pack(fill="x", pady=(0, 12))
         ttk.Button(body, text="Abrir playit.gg", style="Secondary.TButton",
-                   command=lambda: open_browser("https://playit.gg/agents")).pack(anchor="w", pady=(0, 14))
+                   command=lambda: open_browser("https://playit.gg/account/analytics/overview")).pack(anchor="w", pady=(0, 14))
         tk.Label(body, text="Pega el bloque de Docker o la SECRET_KEY:", bg=BG, fg=FG,
                  font=FONT_B).pack(anchor="w")
         self.input = tk.Text(body, height=5, bg=PANEL, fg=FG, insertbackground=FG,
@@ -1077,7 +1077,7 @@ class PlayitSetupDialog(tk.Toplevel):
         self.app.log("playit quedó vinculado y el agente está activo.")
         self.app.refresh()
         self.destroy()
-        open_browser("https://playit.gg/agents")
+        open_browser("https://playit.gg/account/analytics/overview")
         TunnelHelpDialog(self.app)
 
 
@@ -1110,7 +1110,7 @@ class TunnelHelpDialog(tk.Toplevel):
         tk.Label(body, text=steps, bg=BG, fg=FG, font=FONT, justify="left",
                  anchor="w", wraplength=530).pack(fill="x", pady=(10, 12))
         ttk.Button(body, text="Abrir playit.gg", style="Secondary.TButton",
-                   command=lambda: open_browser("https://playit.gg/agents")).pack(anchor="w", pady=(0, 14))
+                   command=lambda: open_browser("https://playit.gg/account/analytics/overview")).pack(anchor="w", pady=(0, 14))
         tk.Label(body, text="Dirección del túnel:", bg=BG, fg=FG, font=FONT_B).pack(anchor="w")
         self.entry = ttk.Entry(body, style="Dark.TEntry", font=("DejaVu Sans Mono", 10))
         current = self.app.playit.address()
