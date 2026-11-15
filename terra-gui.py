@@ -550,6 +550,7 @@ class PlayitController:
         self.cache = self.directory / "tunnel.txt"
         self.pid_file = self.directory / "agent.pid"
         self.process = None
+        self.started_at = None
 
     def agent_path(self):
         name = "playitd.exe" if platform.system() == "Windows" else "playitd"
@@ -620,7 +621,47 @@ class PlayitController:
             pass
         return None
 
+    def _read_pid(self):
+        try:
+            return int(self.pid_file.read_text().strip())
+        except (OSError, ValueError):
+            return None
+
+    def _pid_is_agent(self, pid):
+        """True solo si ese PID sigue siendo el playitd de esta app."""
+        if not pid or pid <= 0:
+            return False
+        if platform.system() == "Windows":
+            try:
+                out = subprocess.run(
+                    ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                    capture_output=True, text=True, timeout=5,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                ).stdout.lower()
+                return "playitd" in out
+            except Exception:
+                return False
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        try:
+            raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+        except OSError:
+            return False
+        cmdline = raw.replace(b"\0", b" ").decode(errors="ignore")
+        return "playitd" in cmdline and str(self.directory) in cmdline
+
+    def running(self):
+        """True si el proceso del agente sigue vivo (aunque no haya conectado)."""
+        if self.process is not None:
+            return self.process.poll() is None
+        return self._pid_is_agent(self._read_pid())
+
     def connected(self):
+        # Un log viejo no basta: si el proceso murió, no hay túnel.
+        if not self.running():
+            return False
         try:
             log = self.log.read_text(errors="ignore")
             return bool(re.search(
@@ -637,19 +678,31 @@ class PlayitController:
             except Exception:
                 try:
                     self.process.kill()
+                    self.process.wait(timeout=5)
                 except Exception:
                     pass
         self.process = None
-        try:
-            pid = int(self.pid_file.read_text().strip())
+        self.started_at = None
+        pid = self._read_pid()
+        if pid and self._pid_is_agent(pid):
             if platform.system() == "Windows":
                 subprocess.run(["taskkill", "/PID", str(pid), "/F"],
                                capture_output=True, timeout=5)
             else:
-                os.kill(pid, 15)
-        except Exception:
-            pass
+                try:
+                    os.kill(pid, 15)
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline and self._pid_is_agent(pid):
+                        time.sleep(0.2)
+                    if self._pid_is_agent(pid):
+                        os.kill(pid, 9)
+                except OSError:
+                    pass
         self.pid_file.unlink(missing_ok=True)
+        try:
+            self.socket.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def address_parts(self):
         """Devuelve (IP/nombre, puerto) del túnel, por separado."""
@@ -688,8 +741,11 @@ class PlayitController:
                       "stdout": log_file, "stderr": subprocess.STDOUT}
             if platform.system() == "Windows":
                 kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            self.process = subprocess.Popen(
-                [str(agent), "--secret-path", str(self.secret), "--socket-path", str(self.socket)], **kwargs)
+            argv = [str(agent), "--secret-path", str(self.secret)]
+            if platform.system() != "Windows":
+                argv += ["--socket-path", str(self.socket)]
+            self.process = subprocess.Popen(argv, **kwargs)
+        self.started_at = time.time()
         self.pid_file.write_text(str(self.process.pid))
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
@@ -730,12 +786,14 @@ class App(tk.Tk):
         self.busy = False
         self.is_running = False
         self.copied_until = 0.0
+        self.playit_busy = False
+        self.playit_retry_at = 0.0
         self.playit = PlayitController(app_base())
         self.build()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.refresh()
         if self.playit.has_secret():
-            self._safe(lambda: self.playit.start_and_check(), lambda: self.refresh())
+            self.ensure_playit()
         else:
             self.after(700, lambda: PlayitSetupDialog(self))
 
@@ -916,10 +974,15 @@ class App(tk.Tk):
 
             if self.playit.connected():
                 self.lbl_playit.config(text="playit.gg: conectado", fg=GREEN)
+            elif self.playit_busy:
+                self.lbl_playit.config(text="playit.gg: reconectando…", fg=YELLOW)
             elif self.playit.has_secret():
                 self.lbl_playit.config(text="playit.gg: conectando…", fg=YELLOW)
             else:
                 self.lbl_playit.config(text="playit.gg: sin conectar", fg=YELLOW)
+
+            if self.is_running:
+                self.ensure_playit()
 
             host, tunnel_port = self.playit.address_parts()
             if host and tunnel_port:
@@ -945,6 +1008,39 @@ class App(tk.Tk):
         except Exception as e:
             self.lbl_detail.config(text=f"Error: {e}", fg=RED)
         self.after(3000, self.refresh)
+
+    def ensure_playit(self):
+        """Relanza el agente si se cayó, sin bloquear la interfaz ni duplicarlo."""
+        if self.playit_busy or not self.playit.has_secret():
+            return
+        if self.playit.connected():
+            return
+        if self.playit.running():
+            started = getattr(self.playit, "started_at", None)
+            if started and time.time() - started < 75:
+                return
+        now = time.time()
+        if now < self.playit_retry_at:
+            return
+        self.playit_busy = True
+        self.lbl_playit.config(text="playit.gg: reconectando…", fg=YELLOW)
+        self.log("playit: agente caído; reconectando…")
+
+        def work():
+            error = None
+            try:
+                self.playit.start_and_check()
+            except Exception as exc:
+                error = str(exc)
+            finally:
+                self.playit_busy = False
+            if error:
+                self.playit_retry_at = time.time() + 20
+                self.after(0, lambda m=error: self.log("playit: " + m))
+            else:
+                self.playit_retry_at = 0.0
+
+        threading.Thread(target=work, daemon=True).start()
 
     def log(self, msg):
         self.txt.config(state="normal")
@@ -1008,6 +1104,7 @@ class App(tk.Tk):
         self.busy = False
         self.log("servidor iniciado")
         self.refresh()
+        self.ensure_playit()
 
     def start_failed(self, message):
         self.busy = False
@@ -1094,16 +1191,23 @@ class App(tk.Tk):
             self._safe(lambda: self.log(B.log_lines()))
 
     def on_close(self):
+        keep_server = False
         if B._running():
             stop_server = messagebox.askyesno(
-                "Servidor activo", "¿Detengo el servidor al cerrar la app?", parent=self)
+                "Servidor activo",
+                "¿Detengo el servidor al cerrar la app?\n\n"
+                "Si eliges No, el servidor y playit seguirán conectados.",
+                parent=self)
             if stop_server:
                 try:
                     B.stop()
                 except Exception as exc:
                     messagebox.showerror("No se pudo detener", str(exc), parent=self)
                     return
-        self.playit.stop()
+            else:
+                keep_server = True
+        if not keep_server:
+            self.playit.stop()
         self.destroy()
 
 class PlayitSetupDialog(tk.Toplevel):
