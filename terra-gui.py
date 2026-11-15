@@ -278,8 +278,32 @@ class WinBackend:
         self.meta_file.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
 
     # estado
+    def _server_pids(self):
+        """PIDs del servidor de este paquete, aunque no lo lanzara esta instancia."""
+        if self.proc is not None and self.proc.poll() is None:
+            return [self.proc.pid]
+        if platform.system() != "Linux":
+            return []
+        exe = str(self.exe)
+        win_dir = str(self.win_dir)
+        pids = []
+        try:
+            entries = Path("/proc").iterdir()
+        except OSError:
+            return []
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try:
+                cmdline = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="ignore")
+            except OSError:
+                continue
+            if cmdline.split(" ", 1)[0] == exe and win_dir in cmdline:
+                pids.append(int(entry.name))
+        return pids
+
     def _running(self):
-        return self.proc is not None and self.proc.poll() is None
+        return bool(self._server_pids())
 
     def status(self):
         cfg = self.cfg()
@@ -335,6 +359,20 @@ class WinBackend:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
             self.proc = None
+        if platform.system() == "Linux":
+            for pid in self._server_pids():
+                try:
+                    os.kill(pid, 15)
+                except OSError:
+                    pass
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and self._server_pids():
+                time.sleep(0.2)
+            for pid in self._server_pids():
+                try:
+                    os.kill(pid, 9)
+                except OSError:
+                    pass
         return True
 
     def use_world(self, name, restart=True):
@@ -502,32 +540,43 @@ class PortableBackend(WinBackend):
             env["LD_LIBRARY_PATH"] = libdir + os.pathsep + env.get("LD_LIBRARY_PATH", "")
             env["MONO_IOMAP"] = "all"
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
-        fh = self.log_file.open("a", encoding="utf-8", errors="ignore")
-        options = {"cwd": str(self.win_dir), "stdin": subprocess.DEVNULL,
-                   "stdout": fh, "stderr": subprocess.STDOUT, "env": env}
-        if platform.system() == "Windows":
-            options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        try:
-            self.proc = subprocess.Popen(args, **options)
-        except Exception:
+        attempts = 3 if platform.system() == "Linux" else 1
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            fh = self.log_file.open("w", encoding="utf-8", errors="ignore")
+            options = {"cwd": str(self.win_dir), "stdin": subprocess.DEVNULL,
+                       "stdout": fh, "stderr": subprocess.STDOUT, "env": env}
+            if platform.system() == "Windows":
+                options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            try:
+                self.proc = subprocess.Popen(args, **options)
+            except Exception:
+                fh.close()
+                raise
             fh.close()
-            raise
-        if wait:
+            if not wait:
+                return True
             deadline = time.monotonic() + 180
             while time.monotonic() < deadline:
                 if self.proc.poll() is not None:
-                    details = self.log_lines(30).strip()
-                    raise RuntimeError("El servidor terminó durante el inicio. " + (details[-1200:] or "Revisa la configuración."))
+                    details = self.log_lines(80).strip()
+                    last_error = ("El servidor terminó durante el inicio. "
+                                  + (details[-1200:] or "Revisa la configuración."))
+                    break
                 try:
-                    if port_open(int(cfg.get("PORT", "7777"))):
+                    if ("Server started" in self.log_lines(120)
+                            and port_open(int(cfg.get("PORT", "7777")))):
                         return True
                 except ValueError:
                     self.stop()
                     raise RuntimeError("El puerto configurado no es válido.")
                 time.sleep(1)
+            else:
+                last_error = "El servidor no llegó a «Server started» en tres minutos."
             self.stop()
-            raise RuntimeError("El servidor no abrió el puerto en tres minutos. Revisa el registro de la app.")
-        return True
+            if attempt < attempts:
+                time.sleep(2)
+        raise RuntimeError(last_error or "No se pudo iniciar el servidor.")
 
 
 def pick_backend():
